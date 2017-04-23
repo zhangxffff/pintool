@@ -12,18 +12,32 @@
 #include <stack>
 #include <ctype.h>
 #include <map>
+#include <list>
+#include <algorithm>
+
+#define DEBUG false
 
 /* ================================================================== */
 // Global variables 
 /* ================================================================== */
 
-static bool isMain = false;
-std::set<UINT32> taintedAddr;
-std::set<REG> taintedReg;
-std::stack<UINT32> stackTopAddr;
+static bool isMain = true;
+std::vector<UINT32> stackTopAddr;
 std::map<REG, UINT32> regTaintBy;
 std::map<UINT32, UINT32> addrTaintBy;
+std::list<std::pair<UINT32, UINT32> > inputList;
 
+void addrTaintedFrom(UINT32 addr, UINT32 inputAddr) {
+    typeof(inputList.begin()) it = inputList.end();
+    for (int i = inputList.size() - 1; i >= 0; i--) {
+        it--;
+        if (it->first <= inputAddr && inputAddr < it->first + it->second) {
+            cerr << "[FATAL] Addr 0x" << std::hex << addr;
+            cerr << "was tainted by " << inputAddr - it->first;
+            cerr << " bytes of " << i << "th input" << endl;
+        }
+    }
+}
 
 UINT32 findTaintSrc(UINT32 addr) {
     while (addrTaintBy.find(addr) != addrTaintBy.end()) {
@@ -38,15 +52,14 @@ UINT32 findTaintSrc(UINT32 addr) {
 
 void taintAddr(UINT32 addr, UINT32 inputAddr) {
     if (!isMain) return;
+    //cerr << "[Affact]\t0x" << std::hex << addr << " by 0x" << inputAddr << endl;
     if (findTaintSrc(inputAddr) != 0) {
-        addrTaintBy[addr] = inputAddr;
-        cout << "[Taint]\t0x" << std::hex << addr << " by 0x" << inputAddr << endl;
-    }
-}
+        addrTaintBy[addr] = findTaintSrc(inputAddr);
+        if (DEBUG) cerr << "[Taint]\t0x" << std::hex << addr << " by 0x" << inputAddr << endl;
+        if (std::find(stackTopAddr.begin(), stackTopAddr.end(), addr) != stackTopAddr.end()) {
+            addrTaintedFrom(addr, addrTaintBy[addr]);
+        }
 
-void taintSomeAddr(UINT32 addr, UINT32 size) {
-    for (UINT32 i = 0; i < size; i++) {
-        addrTaintBy[addr + i] = addr + i;
     }
 }
 
@@ -58,6 +71,20 @@ void untaintAddr(UINT32 addr) {
         } else {
             i++;
         }
+    }
+    for (std::map<REG, UINT32>::iterator i = regTaintBy.begin(); i!= regTaintBy.end(); ) {
+        if (i->second == addr) {
+            regTaintBy.erase(i++);
+        } else {
+            i++;
+        }
+    }
+}
+
+void taintSomeAddr(UINT32 addr, UINT32 size) {
+    for (UINT32 i = 0; i < size; i++) {
+        untaintAddr(addr + i);
+        addrTaintBy[addr + i] = addr + i;
     }
 }
 
@@ -99,8 +126,12 @@ void untaintReg(REG reg) {
 
 void taintRegByAddr(REG reg, UINT32 addr) {
     if (!isMain) return;
-    if (findTaintSrc(addr) == 0) untaintReg(reg);
-    cout << "[Taint]\t" << REG_StringShort(reg) << " by \t0x" << std::hex << addr << endl;
+    //cerr << "[Affact]\t" << REG_StringShort(reg) << " by \t0x" << std::hex << addr << endl;
+    if (findTaintSrc(addr) == 0) { 
+        untaintReg(reg);
+        return;
+    }
+    if (DEBUG) cerr << "[Taint]\t" << REG_StringShort(reg) << " by \t0x" << std::hex << addr << endl;
     switch (reg) {
         case REG_EAX:
             regTaintBy[REG_EAX] = addr;
@@ -109,20 +140,15 @@ void taintRegByAddr(REG reg, UINT32 addr) {
             regTaintBy[REG_AL] = addr;
             break;
         case REG_AX:
-            regTaintBy[REG_EAX] = 0;
+            regTaintBy.erase(REG_EAX);
             regTaintBy[REG_AX] = addr;
             regTaintBy[REG_AH] = addr + 1;
             regTaintBy[REG_AL] = addr;
             break;
-        case REG_AH:
-            regTaintBy[REG_EAX] = 0;
-            regTaintBy[REG_AX] = 0;
-            regTaintBy[REG_AH] = addr;
-            break;
-        case REG_AL:
-            regTaintBy[REG_EAX] = 0;
-            regTaintBy[REG_AX] = 0;
-            regTaintBy[REG_AL] = addr;
+        case REG_AH: case REG_AL:
+            regTaintBy.erase(REG_EAX);
+            regTaintBy.erase(REG_AX);
+            regTaintBy[reg] = addr;
             break;
 
         case REG_EBX:
@@ -132,20 +158,15 @@ void taintRegByAddr(REG reg, UINT32 addr) {
             regTaintBy[REG_BL] = addr;
             break;
         case REG_BX:
-            regTaintBy[REG_EBX] = 0;
+            regTaintBy.erase(REG_EBX);
             regTaintBy[REG_BX] = addr;
             regTaintBy[REG_BH] = addr + 1;
             regTaintBy[REG_BL] = addr;
             break;
-        case REG_BH:
-            regTaintBy[REG_EBX] = 0;
-            regTaintBy[REG_BX] = 0;
-            regTaintBy[REG_BH] = addr;
-            break;
-        case REG_BL:
-            regTaintBy[REG_EBX] = 0;
-            regTaintBy[REG_BX] = 0;
-            regTaintBy[REG_BL] = addr;
+        case REG_BH: case REG_BL:
+            regTaintBy.erase(REG_EBX);
+            regTaintBy.erase(REG_BX);
+            regTaintBy[reg] = addr;
             break;
 
         case REG_ECX:
@@ -155,20 +176,15 @@ void taintRegByAddr(REG reg, UINT32 addr) {
             regTaintBy[REG_CL] = addr;
             break;
         case REG_CX:
-            regTaintBy[REG_ECX] = 0;
+            regTaintBy.erase(REG_ECX);
             regTaintBy[REG_CX] = addr;
             regTaintBy[REG_CH] = addr + 1;
             regTaintBy[REG_CL] = addr;
             break;
-        case REG_CH:
-            regTaintBy[REG_ECX] = 0;
-            regTaintBy[REG_CX] = 0;
-            regTaintBy[REG_CH] = addr;
-            break;
-        case REG_CL:
-            regTaintBy[REG_ECX] = 0;
-            regTaintBy[REG_CX] = 0;
-            regTaintBy[REG_CL] = addr;
+        case REG_CH: case REG_CL:
+            regTaintBy.erase(REG_ECX);
+            regTaintBy.erase(REG_CX);
+            regTaintBy[reg] = addr;
             break;
 
         case REG_EDX:
@@ -178,20 +194,15 @@ void taintRegByAddr(REG reg, UINT32 addr) {
             regTaintBy[REG_DL] = addr;
             break;
         case REG_DX:
-            regTaintBy[REG_EDX] = 0;
+            regTaintBy.erase(REG_EDX);
             regTaintBy[REG_DX] = addr;
             regTaintBy[REG_DH] = addr + 1;
             regTaintBy[REG_DL] = addr;
             break;
-        case REG_DH:
-            regTaintBy[REG_EDX] = 0;
-            regTaintBy[REG_DX] = 0;
-            regTaintBy[REG_DH] = addr;
-            break;
-        case REG_DL:
-            regTaintBy[REG_EDX] = 0;
-            regTaintBy[REG_DX] = 0;
-            regTaintBy[REG_DL] = addr;
+        case REG_DH: case REG_DL:
+            regTaintBy.erase(REG_EDX);
+            regTaintBy.erase(REG_DX);
+            regTaintBy[reg] = addr;
             break;
 
         default:
@@ -201,8 +212,18 @@ void taintRegByAddr(REG reg, UINT32 addr) {
 
 void taintRegByReg(REG desReg, REG srcReg) {
     if (!isMain) return;
+    //cerr << "[Affact]\t" << REG_StringShort(desReg) << " by \t" << REG_StringShort(srcReg) << endl;
     if (regTaintBy.find(srcReg) == regTaintBy.end()) return;
     taintRegByAddr(desReg, regTaintBy[srcReg]);
+    if (DEBUG) cerr << "[Taint]\t" << REG_StringShort(desReg) << " by \t" << REG_StringShort(srcReg) << endl;
+}
+
+void taintAddrByReg(UINT32 addr, REG reg) {
+    if (!isMain) return;
+    //cerr << "[Affact]\t0x" << std::hex << addr << " by \t" << REG_StringShort(reg) << endl;
+    if (regTaintBy.find(reg) == regTaintBy.end()) return;
+    else taintAddr(addr, regTaintBy[reg]);
+    if (DEBUG) cerr << "[Taint]\t0x" << std::hex << addr << " by \t" << REG_StringShort(reg) << endl;
 }
 
 std::ostream * out = &cerr;
@@ -235,7 +256,7 @@ INT32 Usage() {
 
 void dotaint(void *str) {
     if (!isMain) return;
-    cout << *(string *)str << endl;
+    cerr << *(string *)str << endl;
 }
 
 VOID Instruction(INS ins, VOID *v) {
@@ -249,28 +270,40 @@ VOID Instruction(INS ins, VOID *v) {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)taintRegByAddr,
                 IARG_UINT32, INS_RegW(ins, 0),
                 IARG_MEMORYOP_EA, 0, IARG_END);
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)dotaint,
-                IARG_PTR, new string(INS_Disassemble(ins)), IARG_END);
+    } else if (INS_MemoryOperandCount(ins) == 1 && INS_MemoryOperandIsWritten(ins, 0)
+            && (INS_OperandIsReg(ins, 0) || INS_OperandIsReg(ins, 1))
+            && !INS_MemoryOperandIsRead(ins, 0)) {
+        REG reg;
+        if (INS_OperandIsReg(ins, 0)) reg = INS_OperandReg(ins, 0);
+        else reg = INS_OperandReg(ins, 1);
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)taintAddrByReg,
+                IARG_MEMORYOP_EA, 0,
+                IARG_UINT32, reg, IARG_END);
+    } else if (INS_OperandCount(ins) > 1 && INS_OperandIsReg(ins, 0) 
+            && INS_OperandIsReg(ins, 1) && !INS_OperandRead(ins, 0)) {
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)taintRegByReg,
+                IARG_UINT32, INS_OperandReg(ins, 0),
+                IARG_UINT32, INS_OperandReg(ins, 1), IARG_END);
     }
 }
 
 
 void triggerMain() {
     isMain = !isMain;
-    if (isMain) cout << "========[Main Function Begin]========" << endl;
-    else cout << "=========[Main Function End]=========" << endl;
+    if (isMain) cerr << "========[Main Function Begin]========" << endl;
+    else cerr << "=========[Main Function End]=========" << endl;
 }
 
 void pushStackAddr(void *rtnName, UINT32 addr) {
     if (!isMain) return;
-    cout << "Enter 0x" << std::hex << addr << "\t" << *(string*)rtnName << endl;
-    stackTopAddr.push(addr);
+    cerr << "Enter 0x" << std::hex << addr << "\t" << *(string*)rtnName << endl;
+    stackTopAddr.push_back(addr);
 }
 void popStackAddr(void *rtnName) {
     if (!isMain) return;
     if (stackTopAddr.empty()) return;
-    cout << "Leave 0x" << std::hex << stackTopAddr.top() << "\t" << *(string*)rtnName << endl;
-    stackTopAddr.pop();
+    cerr << "Leave 0x" << std::hex << stackTopAddr.back() << "\t" << *(string*)rtnName << endl;
+    stackTopAddr.pop_back();
 }
 
 
@@ -318,24 +351,24 @@ VOID Fini(INT32 code, VOID *v) {
 }
 
 
-static bool first_read = true;
+static bool firstRead = true;
 
 VOID Syscall_entry(THREADID thread_id, CONTEXT *ctx, SYSCALL_STANDARD std, void *v) {
-  UINT64 start, size;
+    UINT32 start, size;
 
-  if (PIN_GetSyscallNumber(ctx, std) == __NR_read) {
-      if (first_read) {
-          first_read = false;
-          return;
-      }
+    if (PIN_GetSyscallNumber(ctx, std) == __NR_read) {
+        if (firstRead) {
+            firstRead = false;
+            return;
+        }
 
-      start = static_cast<UINT32>((PIN_GetSyscallArgument(ctx, std, 1)));
-      size  = static_cast<UINT32>((PIN_GetSyscallArgument(ctx, std, 2)));
+        start = static_cast<UINT32>((PIN_GetSyscallArgument(ctx, std, 1)));
+        size  = static_cast<UINT32>((PIN_GetSyscallArgument(ctx, std, 2)));
 
-      taintSomeAddr(start, size);
-
-      std::cout << "[READ]\tbytes from " << std::hex << "0x" << start << " to 0x" << start+size << std::endl;
-  }
+        taintSomeAddr(start, size);
+        inputList.push_back(std::make_pair(start, size));
+        cerr << "[READ]\tbytes from " << std::hex << "0x" << start << " to 0x" << start+size << std::endl;
+    }
 }
 
 /*!
@@ -360,7 +393,7 @@ int main(int argc, char *argv[]) {
 
         PIN_InitSymbols();
         PIN_AddSyscallEntryFunction(Syscall_entry, 0);
-        IMG_AddInstrumentFunction(Image, 0);
+        //IMG_AddInstrumentFunction(Image, 0);
         RTN_AddInstrumentFunction(Routine, 0);
         INS_AddInstrumentFunction(Instruction, 0);
 
