@@ -26,6 +26,7 @@ std::vector<UINT32> stackTopAddr;
 std::map<REG, UINT32> regTaintBy;
 std::map<UINT32, UINT32> addrTaintBy;
 std::list<std::pair<UINT32, UINT32> > inputList;
+std::set<ADDRINT> funcAddrSet;
 
 void addrTaintedFrom(UINT32 addr, UINT32 inputAddr) {
     typeof(inputList.begin()) it = inputList.end();
@@ -260,6 +261,11 @@ void dotaint(void *str) {
 }
 
 VOID Instruction(INS ins, VOID *v) {
+
+    if (INS_IsCall(ins)) {
+        //TODO
+    }
+
     if (INS_MemoryOperandCount(ins) == 2 && !INS_IsCall(ins)) {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)taintAddr,
                 IARG_MEMORYOP_EA, 0,
@@ -317,6 +323,7 @@ bool isValidId(const string& str) {
 }
 VOID Routine(RTN rtn, VOID *v) {
     RTN_Open(rtn);
+    funcAddrSet.insert(RTN_Address(rtn));
 
     if (RTN_Name(rtn) == "main") {
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)triggerMain, IARG_END);
