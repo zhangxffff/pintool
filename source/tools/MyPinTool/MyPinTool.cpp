@@ -22,6 +22,7 @@
 /* ================================================================== */
 
 static bool isMain = false;
+static bool isPLT = false;
 static long long insCount = 0;
 static stack<UINT32> shadowStack;
 
@@ -55,20 +56,22 @@ INT32 Usage() {
 
 void handler(string *name) {
     insCount++;
-    if (isMain) cout << *name << endl;
+    //if (isMain) cout << *name << endl;
 }
 
 int callCount = 0;
 int retCount = 0;
 
 void callHandler(UINT32 esp) {
-    if (!isMain) return;
+    //if (!isMain) return;
+    if (isPLT) return;
     shadowStack.push(esp - 4);
     callCount++;
 }
 
 void retHandler(UINT32 esp) {
-    if (!isMain) return;
+    //if (!isMain) return;
+    if (isPLT) return;
     retCount++;
     if (shadowStack.empty()) {
         cout << "empty" << endl;
@@ -82,6 +85,8 @@ void retHandler(UINT32 esp) {
 
 
 VOID Instruction(INS ins, VOID *v) {
+    RTN rtn = INS_Rtn(ins);
+    if (!RTN_Valid(rtn)) return;
     INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)handler, IARG_PTR, new string(INS_Disassemble(ins)), IARG_END);
     if (INS_IsCall(ins)) {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)callHandler, IARG_REG_VALUE, REG_ESP, IARG_END);
@@ -95,6 +100,12 @@ void triggerMain() {
     isMain = !isMain;
     if (isMain) cerr << "========[Main Function Begin]========" << endl;
     else cerr << "=========[Main Function End]=========" << endl;
+}
+
+void triggerPLT() {
+    isPLT = !isPLT;
+    if (isPLT) cerr << "========[PLT Function Begin]========" << endl;
+    else cerr << "=========[PLT Function End]=========" << endl;
 }
 
 bool isValidId(const string& str) {
@@ -138,6 +149,13 @@ VOID Routine(RTN rtn, VOID *v) {
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerMain, IARG_END);
     }
 
+    if (RTN_Name(rtn) == ".plt") {
+        RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)triggerPLT, IARG_END);
+    }
+
+    if (RTN_Name(rtn) == ".plt") {
+        RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerPLT, IARG_END);
+    }
     RTN_Close(rtn);
 }
 
