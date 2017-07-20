@@ -1,5 +1,4 @@
 obj-intel64/
 obj-ia32/
 *.log
-test.c
 a.out
