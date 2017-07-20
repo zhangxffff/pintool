@@ -74,7 +74,7 @@ void retHandler(UINT32 esp) {
     if (isPLT) return;
     retCount++;
     if (shadowStack.empty()) {
-        cout << "empty" << endl;
+        cout << "Waining: empty" << endl;
     } else {
         if (shadowStack.top() != esp) {
             cout << "ERROR: ret addr not match " << hex << esp << " " << shadowStack.top() << endl;
@@ -130,21 +130,18 @@ void rtnHandler(string *name) {
 VOID Routine(RTN rtn, VOID *v) {
     RTN_Open(rtn);
 
+    /*
     if (RTN_Name(rtn) == "_start") {
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)triggerMain, IARG_END);
     }
-    /*
     if (isValidId(RTN_Name(rtn))) {
-    */
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)rtnHandler,
                 IARG_PTR, new string(RTN_Name(rtn)),
                 IARG_REG_VALUE, REG_ESP, IARG_END);
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)rtnHandler,
                 IARG_PTR, new string(RTN_Name(rtn)),
                 IARG_REG_VALUE, REG_ESP, IARG_END);
-/*
     }
-    */
     if (RTN_Name(rtn) == "_start") {
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerMain, IARG_END);
     }
@@ -156,6 +153,7 @@ VOID Routine(RTN rtn, VOID *v) {
     if (RTN_Name(rtn) == ".plt") {
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerPLT, IARG_END);
     }
+    */
     RTN_Close(rtn);
 }
 
@@ -174,9 +172,11 @@ VOID Fini(INT32 code, VOID *v) {
     cout << insCount << endl;
     cout << "call count: " << dec << callCount << endl;
     cout << "ret count: " << retCount << endl;
+    /*
     for (map<string, int>::iterator p = rtnCount.begin(); p != rtnCount.end(); p++) {
         cout << p->first << ": " << p->second << endl;
     }
+    */
 }
 
 
