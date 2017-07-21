@@ -22,9 +22,7 @@
 /* ================================================================== */
 
 static bool isMain = false;
-static bool isPLT = false;
-static long long insCount = 0;
-static stack<UINT32> shadowStack;
+static vector<UINT32> shadowStack;
 
 std::ostream * out = &cerr;
 
@@ -54,58 +52,70 @@ INT32 Usage() {
     return -1;
 }
 
-void handler(string *name) {
-    insCount++;
-    //if (isMain) cout << *name << endl;
-}
-
-int callCount = 0;
-int retCount = 0;
-
 void callHandler(UINT32 esp) {
-    //if (!isMain) return;
-    if (isPLT) return;
-    shadowStack.push(esp - 4);
-    callCount++;
+    if (!isMain) return;
+    shadowStack.push_back(esp - 4);
 }
 
 void retHandler(UINT32 esp) {
-    //if (!isMain) return;
-    if (isPLT) return;
-    retCount++;
+    if (!isMain) return;
     if (shadowStack.empty()) {
-        cout << "Waining: empty" << endl;
+        cout << "Warning: empty" << endl;
     } else {
-        if (shadowStack.top() != esp) {
-            cout << "ERROR: ret addr not match " << hex << esp << " " << shadowStack.top() << endl;
+        if (shadowStack.back() != esp) {
+            cout << "Warning: ret addr not match 0x" << hex << esp << " 0x" << shadowStack.back() << endl;
         }
-        shadowStack.pop();
+        if (shadowStack.back() == esp) {
+            shadowStack.pop_back();
+        } else if (shadowStack.back() > esp) {
+            return;
+        } else {
+            shadowStack.pop_back();
+            retHandler(esp);
+        }
+    }
+}
+
+void memWriteHandler(string *ins, ADDRINT addr, UINT32 size, UINT32 value) {
+    //cout << *ins << "\t" << size << hex << "\t0x" << addr << "\t" << dec << value << endl;
+    if (find(shadowStack.rbegin(), shadowStack.rend(), addr) != shadowStack.rend()) {
+        cout << "Write ret addr: " << "0x" << addr << "\tvalue: " << value << endl;
     }
 }
 
 
 VOID Instruction(INS ins, VOID *v) {
-    RTN rtn = INS_Rtn(ins);
-    if (!RTN_Valid(rtn)) return;
-    INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)handler, IARG_PTR, new string(INS_Disassemble(ins)), IARG_END);
+    //recode ret addr in shadow stack
     if (INS_IsCall(ins)) {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)callHandler, IARG_REG_VALUE, REG_ESP, IARG_END);
     } else if (INS_IsRet(ins)) {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)retHandler, IARG_REG_VALUE, REG_ESP, IARG_END);
+    }
+
+    if (INS_IsMemoryWrite(ins)) {
+        if (INS_IsMov(ins)) {
+            if (INS_OperandIsReg(ins, 1)) {
+                INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)memWriteHandler,
+                        IARG_PTR, new string(INS_Disassemble(ins)),
+                        IARG_MEMORYOP_EA, 0,
+                        IARG_UINT32, INS_MemoryWriteSize(ins),
+                        IARG_REG_VALUE, INS_OperandReg(ins, 1), IARG_END);
+            } else if (INS_OperandIsImmediate(ins, 1)) {
+                INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)memWriteHandler,
+                        IARG_PTR, new string(INS_Disassemble(ins)),
+                        IARG_MEMORYOP_EA, 0,
+                        IARG_UINT32, INS_MemoryWriteSize(ins),
+                        IARG_UINT64, INS_OperandImmediate(ins, 1), IARG_END);
+            }
+        }
     }
 }
 
 
 void triggerMain() {
     isMain = !isMain;
-    if (isMain) cerr << "========[Main Function Begin]========" << endl;
-    else cerr << "=========[Main Function End]=========" << endl;
-}
-
-void triggerPLT() {
-    isPLT = !isPLT;
-    if (isPLT) cerr << "========[PLT Function Begin]========" << endl;
-    else cerr << "=========[PLT Function End]=========" << endl;
+    if (isMain) cerr << "========[_start Begin]========" << endl;
+    else cerr << "=========[_start End]=========" << endl;
 }
 
 bool isValidId(const string& str) {
@@ -117,23 +127,18 @@ bool isValidId(const string& str) {
     return true;
 }
 
-map<string, int> rtnCount;
-
-void rtnHandler(string *name) {
-    if (rtnCount.find(*name) == rtnCount.end()) {
-        rtnCount[*name] = 0;
-    } else {
-        rtnCount[*name]++;
-    }
-}
 
 VOID Routine(RTN rtn, VOID *v) {
     RTN_Open(rtn);
 
-    /*
-    if (RTN_Name(rtn) == "_start") {
+    if (RTN_Name(rtn) == "main") {
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)triggerMain, IARG_END);
     }
+    if (RTN_Name(rtn) == "main") {
+        RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerMain, IARG_END);
+    }
+
+    /*
     if (isValidId(RTN_Name(rtn))) {
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)rtnHandler,
                 IARG_PTR, new string(RTN_Name(rtn)),
@@ -142,10 +147,6 @@ VOID Routine(RTN rtn, VOID *v) {
                 IARG_PTR, new string(RTN_Name(rtn)),
                 IARG_REG_VALUE, REG_ESP, IARG_END);
     }
-    if (RTN_Name(rtn) == "_start") {
-        RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerMain, IARG_END);
-    }
-
     if (RTN_Name(rtn) == ".plt") {
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)triggerPLT, IARG_END);
     }
@@ -154,6 +155,7 @@ VOID Routine(RTN rtn, VOID *v) {
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerPLT, IARG_END);
     }
     */
+
     RTN_Close(rtn);
 }
 
@@ -169,28 +171,12 @@ VOID Image(IMG img, VOID *v) {
  *                              PIN_AddFiniFunction function call
  */
 VOID Fini(INT32 code, VOID *v) {
-    cout << insCount << endl;
-    cout << "call count: " << dec << callCount << endl;
-    cout << "ret count: " << retCount << endl;
-    /*
-    for (map<string, int>::iterator p = rtnCount.begin(); p != rtnCount.end(); p++) {
-        cout << p->first << ": " << p->second << endl;
-    }
-    */
+    cout << shadowStack.size() << endl;
 }
 
 
-static bool firstRead = true;
 
 VOID Syscall_entry(THREADID thread_id, CONTEXT *ctx, SYSCALL_STANDARD std, void *v) {
-
-    if (PIN_GetSyscallNumber(ctx, std) == __NR_read) {
-        if (firstRead) {
-            firstRead = false;
-            return;
-        }
-
-    }
 }
 
 /*!
