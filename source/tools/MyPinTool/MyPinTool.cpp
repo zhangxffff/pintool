@@ -23,6 +23,7 @@
 
 static bool isMain = false;
 static vector<UINT32> shadowStack;
+static vector<ADDRINT> bblVector;
 
 std::ostream * out = &cerr;
 
@@ -53,17 +54,17 @@ INT32 Usage() {
 }
 
 void callHandler(UINT32 esp) {
-    if (!isMain) return;
+    //if (!isMain) return;
     shadowStack.push_back(esp - 4);
 }
 
 void retHandler(UINT32 esp) {
-    if (!isMain) return;
+    //if (!isMain) return;
     if (shadowStack.empty()) {
-        cout << "Warning: empty" << endl;
+        cout << "[Warning]: empty" << endl;
     } else {
         if (shadowStack.back() != esp) {
-            cout << "Warning: ret addr not match 0x" << hex << esp << " 0x" << shadowStack.back() << endl;
+            cout << "[Warning]: ret addr not match 0x" << hex << esp << " 0x" << shadowStack.back() << endl;
         }
         if (shadowStack.back() == esp) {
             shadowStack.pop_back();
@@ -81,6 +82,12 @@ void memWriteHandler(string *ins, ADDRINT addr, UINT32 size, UINT32 value) {
     if (find(shadowStack.rbegin(), shadowStack.rend(), addr) != shadowStack.rend()) {
         cout << "Write ret addr: " << "0x" << addr << "\tvalue: " << value << endl;
     }
+}
+
+void bblHandler(ADDRINT addr, string *str) {
+    if (!isMain) return;
+    bblVector.push_back(addr);
+    //cout << *str << " " << addr << endl;
 }
 
 
@@ -109,8 +116,17 @@ VOID Instruction(INS ins, VOID *v) {
             }
         }
     }
+
 }
 
+VOID Trace(TRACE trace, VOID *v) {
+    for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
+        if (RTN_Valid(INS_Rtn(BBL_InsTail(bbl))))
+        BBL_InsertCall(bbl, IPOINT_BEFORE, (AFUNPTR)bblHandler,
+                IARG_ADDRINT, BBL_Address(bbl),
+                IARG_PTR, new string(RTN_Name(INS_Rtn(BBL_InsTail(bbl)))), IARG_END);
+    }
+}
 
 void triggerMain() {
     isMain = !isMain;
@@ -127,14 +143,32 @@ bool isValidId(const string& str) {
     return true;
 }
 
+static map<string, int> rtnMap;
+
+void mallocHandler(ADDRINT size) {
+    if (!isMain) return;
+    cout << dec << size << endl;
+}
+
+void mallocResultHandler(string *addr) {
+    if (!isMain) return;
+    cout << hex << "0x" << *addr << endl;
+}
 
 VOID Routine(RTN rtn, VOID *v) {
     RTN_Open(rtn);
 
-    if (RTN_Name(rtn) == "main") {
+    if (RTN_Name(rtn) == "__libc_malloc"){
+        RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)mallocHandler,
+                IARG_FUNCARG_ENTRYPOINT_VALUE, 0, IARG_END);
+        INS_InsertCall(RTN_InsHead(rtn), IPOINT_BEFORE, (AFUNPTR)mallocResultHandler,
+                IARG_PTR, new string(INS_Disassemble(RTN_InsHead(rtn))), IARG_END);
+    }
+
+    if (RTN_Name(rtn) == "_start") {
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)triggerMain, IARG_END);
     }
-    if (RTN_Name(rtn) == "main") {
+    if (RTN_Name(rtn) == "_start") {
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerMain, IARG_END);
     }
 
@@ -171,7 +205,15 @@ VOID Image(IMG img, VOID *v) {
  *                              PIN_AddFiniFunction function call
  */
 VOID Fini(INT32 code, VOID *v) {
+    /*
     cout << shadowStack.size() << endl;
+    for (vector<ADDRINT>::iterator t = bblVector.begin(); t != bblVector.end(); t++) {
+        cout << "0x" << hex << *t << endl;
+    }
+    for (map<string, int>::iterator it = rtnMap.begin(); it != rtnMap.end(); it++) {
+        cout << it->first << " " << it->second << endl;
+    }
+    */
 }
 
 
@@ -204,6 +246,7 @@ int main(int argc, char *argv[]) {
         //IMG_AddInstrumentFunction(Image, 0);
         RTN_AddInstrumentFunction(Routine, 0);
         INS_AddInstrumentFunction(Instruction, 0);
+        TRACE_AddInstrumentFunction(Trace, 0);
 
         // Register function to be called when the application exits
         PIN_AddFiniFunction(Fini, 0);
