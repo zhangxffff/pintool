@@ -2,3 +2,4 @@ obj-intel64/
 obj-ia32/
 *.log
 a.out
+*.trace

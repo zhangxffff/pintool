@@ -1,5 +1,10 @@
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+
 int main() {
-    void *a = malloc(100);
-    free(a);
+    sleep(30);
+    printf("detach\n");
+    malloc(1);
+    sleep(30);
 }
