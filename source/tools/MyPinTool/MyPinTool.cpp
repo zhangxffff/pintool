@@ -17,17 +17,26 @@
 
 #define DEBUG false
 
+struct ReadEntity {
+    UINT32 start;
+    UINT32 size;
+    char *data;
+};
+
 /* ================================================================== */
 // Global variables 
 /* ================================================================== */
 
-static bool isStart = false;
+static bool isStart = true;
 static vector<UINT32> shadowStack;
 static vector<ADDRINT> bblVector;
+static vector<string*> bblRoutineVector;
 static string inputFileName;
 static string inputFilePath;
 static list<pair<ADDRINT, ADDRINT> > mallocMem;
+static vector<ReadEntity> readEntities;
 std::ostream * out = &cerr;
+
 
 /* ===================================================================== */
 // Command line switches
@@ -56,17 +65,17 @@ INT32 Usage() {
 }
 
 void callHandler(UINT32 esp) {
-    //if (!isStart) return;
+    if (!isStart) return;
     shadowStack.push_back(esp - 4);
 }
 
 void retHandler(UINT32 esp) {
-    //if (!isStart) return;
+    if (!isStart) return;
     if (shadowStack.empty()) {
-        //cout << "[Warning]: empty" << endl;
+        cout << "[Warning]: empty" << endl;
     } else {
         if (shadowStack.back() != esp) {
-            //cout << "[Warning]: ret addr not match 0x" << hex << esp << " 0x" << shadowStack.back() << endl;
+            cout << "[Warning]: ret addr not match 0x" << hex << esp << " 0x" << shadowStack.back() << endl;
         }
         if (shadowStack.back() == esp) {
             shadowStack.pop_back();
@@ -143,7 +152,11 @@ string stripName(const string &name) {
 
 void bblHandler(ADDRINT addr, string *str) {
     if (!isStart) return;
+    if (!bblRoutineVector.empty() && 
+            *str == *(bblRoutineVector.back()) && str->rfind("plt") == str->size() - 3) return;
+    if (*str == ".plt") return;
     bblVector.push_back(addr);
+    bblRoutineVector.push_back(str);
     //cout << "0x" << hex << addr << " " << *str << endl;
 }
 
@@ -187,12 +200,14 @@ static map<string, int> rtnMap;
 VOID Routine(RTN rtn, VOID *v) {
     RTN_Open(rtn);
 
+    /*
     if (RTN_Name(rtn) == "_start") {
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)triggerMain, IARG_END);
     }
     if (RTN_Name(rtn) == "_start") {
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)triggerMain, IARG_END);
     }
+    */
 
     RTN_Close(rtn);
 }
@@ -266,8 +281,37 @@ VOID Fini(INT32 code, VOID *v) {
 }
 
 
+void Syscall_exit(THREADID thread_id, CONTEXT *ctx, SYSCALL_STANDARD std, void *v) {
+    if (PIN_GetSyscallNumber(ctx, std) == __NR_read) {
+        cout << "read exit" << endl;
+        if (readEntities.empty() || readEntities.back().data != NULL) {
+            cout << "read enter error" << endl;
+        } else {
+            UINT64 start = readEntities.back().start;
+            UINT32 size = readEntities.back().size;
+            readEntities.back().data = new char[size];
+            PIN_SafeCopy(readEntities.back().data, (VOID *)start, size);
+            cout << readEntities.back().data << endl;
+        }
+    }
+}
+
 
 VOID Syscall_entry(THREADID thread_id, CONTEXT *ctx, SYSCALL_STANDARD std, void *v) {
+    if (PIN_GetSyscallNumber(ctx, std) == __NR_read) {
+        ReadEntity entity;
+        entity.start = PIN_GetSyscallArgument(ctx, std, 1);
+        entity.size = PIN_GetSyscallArgument(ctx, std, 2);
+        entity.data = NULL;
+        readEntities.push_back(entity);
+        //cout << "read " << entity.size << " to 0x" << hex << entity.start << endl;
+
+        for (vector<UINT32>::iterator it = shadowStack.begin(); it != shadowStack.end(); it++) {
+            if (*it >= entity.start && *it <= entity.start + entity.size) {
+                cout << "[write] ret addr 0x" << hex << *it << endl;
+            }
+        }
+    }
 }
 
 /*!
@@ -304,6 +348,7 @@ int main(int argc, char *argv[]) {
 
         PIN_InitSymbols();
         PIN_AddSyscallEntryFunction(Syscall_entry, 0);
+        //PIN_AddSyscallExitFunction(Syscall_exit, 0);
         IMG_AddInstrumentFunction(Image, 0);
         RTN_AddInstrumentFunction(Routine, 0);
         INS_AddInstrumentFunction(Instruction, 0);
